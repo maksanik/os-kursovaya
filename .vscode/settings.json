@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "interface.h": "c",
+        "socket.h": "c",
+        "types.h": "c",
+        "gtk.h": "c",
+        "logic.h": "c",
+        "unistd.h": "c"
+    }
+}
