@@ -3,5 +3,9 @@ all:
 	gcc server1_program/server1.c -o server1 -lX11
 	gcc server2_program/server2.c -o server2 -lX11
 
+windows:
+	gcc -o server server1_program/server1_win.c -lws2_32
+	gcc -o server server2_program/server2_win.c -lws2_32
+
 clean:
 	rm -f client server1 server2
