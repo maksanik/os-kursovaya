@@ -4,6 +4,8 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <time.h>
+#include <tlhelp32.h>
+#include <psapi.h> 
 
 #define PORT 8081
 #define BUFFER_SIZE 1024
@@ -11,23 +13,47 @@
 // Инициализация сокетов Windows
 #pragma comment(lib, "ws2_32.lib")
 
-int get_thread_count()
-{
-    // Для Windows можно использовать Windows API для получения информации о потоках
-    // Эта функция должна быть реализована через WinAPI или другой подход
-    return 1; // Заглушка
+int get_thread_count() {
+    // Получаем количество потоков текущего процесса с помощью Toolhelp API
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) {
+        return -1; // Ошибка при создании снимка
+    }
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(THREADENTRY32);
+    int threadCount = 0;
+
+    // Перебираем все потоки в системе
+    if (Thread32First(hSnap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == GetCurrentProcessId()) {
+                threadCount++;
+            }
+        } while (Thread32Next(hSnap, &te));
+    }
+
+    CloseHandle(hSnap);
+    return threadCount;
 }
 
 int get_process_count() {
-    // Для Windows можно использовать функции Windows API для получения количества процессов
-    // Эта функция должна быть реализована через WinAPI
-    return 1; // Заглушка
+    // Получаем количество процессов, запущенных в системе с помощью Toolhelp API
+    DWORD processList[1024], cbNeeded, processCount = 0;
+    if (EnumProcesses(processList, sizeof(processList), &cbNeeded)) {
+        processCount = cbNeeded / sizeof(DWORD);
+    }
+    return processCount;
 }
 
 DWORD WINAPI handle_client(LPVOID arg)
 {
     SOCKET new_socket = *((SOCKET *)arg);
     free(arg);  // Освобождаем память для аргумента
+
+    // Устанавливаем сокет в неблокирующий режим
+    u_long mode = 1;
+    ioctlsocket(new_socket, FIONBIO, &mode);
 
     // Цикл для отправки данных раз в 1 секунду
     while (1)
@@ -63,10 +89,29 @@ DWORD WINAPI handle_client(LPVOID arg)
         // Задержка 3 секунды
         Sleep(3000);
 
-        // Проверка на разрыв соединения
+        // Проверка на разрыв соединения с использованием неблокирующего recv
         char buffer[1];
-        int bytes_received = recv(new_socket, buffer, 1, MSG_DONTWAIT);
-        if (bytes_received == 0)
+        int bytes_received = recv(new_socket, buffer, 1, 0);
+        if (bytes_received == SOCKET_ERROR)
+        {
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK)
+            {
+                // Нет данных для чтения, продолжаем
+                continue;
+            }
+            else if (err == WSAECONNRESET)
+            {
+                printf("Client disconnected\n");
+                break;
+            }
+            else
+            {
+                printf("recv failed with error %d\n", err);
+                break;
+            }
+        }
+        else if (bytes_received == 0)
         {
             printf("Client disconnected\n");
             break;
@@ -142,7 +187,7 @@ int main()
         printf("Waiting for a new connection...\n");
 
         // Принимаем новое подключение
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen)) == INVALID_SOCKET)
+        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (int *)&addrlen)) == INVALID_SOCKET)
         {
             perror("Accept failed");
             closesocket(server_fd);
@@ -154,9 +199,7 @@ int main()
 
         // Создаем новый поток для обработки клиента
         HANDLE thread_id;
-        SOCKET *new_sock =
-23:39
-malloc(sizeof(SOCKET)); // Выделяем память для сокета
+        SOCKET *new_sock = malloc(sizeof(SOCKET)); // Выделяем память для сокета
         *new_sock = new_socket;
 
         thread_id = CreateThread(NULL, 0, handle_client, (LPVOID)new_sock, 0, NULL);

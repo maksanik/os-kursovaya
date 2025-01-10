@@ -43,7 +43,7 @@ void *handle_client(void *arg) {
                  "Server window size: %d\nTime: %s",
                  window_size, time_buffer);
 
-        if (send(client_socket, response, strlen(response), 0) == SOCKET_ERROR) {
+        if (send(client_socket, response, strlen(response), 0) == -1) {
             perror("send failed");
             break;
         }
@@ -53,7 +53,7 @@ void *handle_client(void *arg) {
         Sleep(3000); // задержка 3 секунды
 
         char buffer[1];
-        int bytes_received = recv(client_socket, buffer, 1, MSG_DONTWAIT);
+        int bytes_received = recv(client_socket, buffer, 1, MSG_DONTROUTE);
         if (bytes_received == 0) {
             printf("Client disconnected\n");
             break;
