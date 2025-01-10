@@ -10,6 +10,10 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+int get_monitor_count() {
+    return GetSystemMetrics(SM_CMONITORS); // Возвращает количество подключённых мониторов
+}
+
 int get_receive_window_size(SOCKET socket_fd) {
     int window_size;
     int optlen = sizeof(window_size);
@@ -19,13 +23,20 @@ int get_receive_window_size(SOCKET socket_fd) {
         return -1;
     }
 
-    // Значение SO_RCVBUF включает удвоенную буферизацию в ядре, поэтому делим на 2
-    return window_size / 2;
+    return window_size / 2; // Значение SO_RCVBUF включает удвоенную буферизацию
 }
 
-void *handle_client(void *arg) {
+DWORD WINAPI handle_client(LPVOID arg) {
     SOCKET client_socket = *(SOCKET *)arg;
     free(arg);
+
+    // Переключение сокета в неблокирующий режим
+    u_long mode = 1;
+    if (ioctlsocket(client_socket, FIONBIO, &mode) != NO_ERROR) {
+        perror("Failed to set non-blocking mode");
+        closesocket(client_socket);
+        return 0;
+    }
 
     while (1) {
         time_t rawtime;
@@ -37,24 +48,36 @@ void *handle_client(void *arg) {
         strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
 
         int window_size = get_receive_window_size(client_socket);
+        int monitor_count = get_monitor_count();
 
         char response[BUFFER_SIZE];
         snprintf(response, BUFFER_SIZE,
-                 "Server window size: %d\nTime: %s",
-                 window_size, time_buffer);
+                 "Server window size: %d\nMonitors: %d\nTime: %s",
+                 window_size, (monitor_count >= 0 ? monitor_count : 0), time_buffer);
 
-        if (send(client_socket, response, strlen(response), 0) == -1) {
+        if (send(client_socket, response, strlen(response), 0) == SOCKET_ERROR) {
             perror("send failed");
             break;
         }
-        
+
         printf("Server information sent:\n%s\n", response);
 
         Sleep(3000); // задержка 3 секунды
 
+        // Проверка на разрыв соединения
         char buffer[1];
-        int bytes_received = recv(client_socket, buffer, 1, MSG_DONTROUTE);
-        if (bytes_received == 0) {
+        int bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+        if (bytes_received == SOCKET_ERROR) {
+            int error_code = WSAGetLastError();
+            if (error_code == WSAEWOULDBLOCK) {
+                // Сокет временно недоступен для чтения — продолжаем
+                continue;
+            } else {
+                // Другая ошибка
+                perror("recv failed");
+                break;
+            }
+        } else if (bytes_received == 0) {
             printf("Client disconnected\n");
             break;
         }
@@ -63,7 +86,7 @@ void *handle_client(void *arg) {
     closesocket(client_socket);
     printf("Connection closed\n");
 
-    return NULL;
+    return 0;
 }
 
 int main() {
@@ -114,18 +137,26 @@ int main() {
     while (1) {
         printf("Waiting for a new connection...\n");
 
-        SOCKET new_socket = accept(server_fd, NULL, NULL);
-        if (new_socket == INVALID_SOCKET) {
+        SOCKET *new_socket = malloc(sizeof(SOCKET));
+        if (!new_socket) {
+            perror("Memory allocation failed");
+            break;
+        }
+
+        *new_socket = accept(server_fd, NULL, NULL);
+        if (*new_socket == INVALID_SOCKET) {
             perror("Accept failed");
+            free(new_socket);
             continue;
         }
 
         printf("New connection accepted\n");
 
-        HANDLE thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)handle_client, (LPVOID)&new_socket, 0, NULL);
+        HANDLE thread = CreateThread(NULL, 0, handle_client, (LPVOID)new_socket, 0, NULL);
         if (thread == NULL) {
             perror("Thread creation failed");
-            closesocket(new_socket);
+            closesocket(*new_socket);
+            free(new_socket);
         } else {
             CloseHandle(thread);
         }
